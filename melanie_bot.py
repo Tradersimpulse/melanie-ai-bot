@@ -6,7 +6,12 @@ from openai import OpenAI
 # --- ENV ---
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+
+# Support channel can be set via ID or fallback to name
+SUPPORT_CHANNEL_ID = os.getenv("SUPPORT_CHANNEL_ID")
+SUPPORT_CHANNEL_ID = int(SUPPORT_CHANNEL_ID) if SUPPORT_CHANNEL_ID and SUPPORT_CHANNEL_ID.isdigit() else 1423351008209141842
 SUPPORT_CHANNEL_NAME = os.getenv("SUPPORT_CHANNEL_NAME", "support")
+
 ASSISTANT_GREETING_NAME = os.getenv("ASSISTANT_GREETING_NAME", "Melanie")
 
 # System instructions for “Melanie”
@@ -32,7 +37,7 @@ log = logging.getLogger("melanie")
 client = OpenAI(api_key=OPENAI_API_KEY)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # fast + capable
 
-# Simple explicit/inappropriate filter (expand as you wish)
+# Simple explicit/inappropriate filter
 EXPLICIT_PAT = re.compile(
     r"(sex|nude|explicit|onlyfans|nsfw|send pics|dick|pussy|naked|porn|blowjob|anal)",
     re.I
@@ -63,11 +68,15 @@ class MelanieClient(discord.Client):
         if msg.author.bot or msg.author == self.user:
             return
 
-        # respond only in #support
-        if msg.channel.name != SUPPORT_CHANNEL_NAME:
-            return
+        # respond only in the support channel (prefer ID, fallback to name)
+        if SUPPORT_CHANNEL_ID:
+            if msg.channel.id != SUPPORT_CHANNEL_ID:
+                return
+        else:
+            if msg.channel.name != SUPPORT_CHANNEL_NAME:
+                return
 
-        # respond when mentioned OR if the message is a reply to Melanie OR starts with her name
+        # respond when mentioned OR if reply to Melanie OR starts with her name
         mentioned = self.user in msg.mentions
         name_called = msg.content.strip().lower().startswith(("melanie", "mel", "@melanie"))
         replying_to_mel = bool(msg.reference and msg.reference.cached_message and
@@ -75,25 +84,24 @@ class MelanieClient(discord.Client):
         if not (mentioned or name_called or replying_to_mel):
             return
 
-        # basic explicit filter
+        # explicit filter
         if EXPLICIT_PAT.search(msg.content):
             try:
                 await msg.add_reaction("🚫")
             except Exception:
                 pass
-            return  # silently ignore
+            return
 
         user_text = msg.content.replace(f"<@{self.user.id}>", "").strip()
         if not user_text:
             user_text = "The user mentioned you in #support. Help them with TGFX Academy."
 
         try:
-            # call OpenAI
             completion = client.chat.completions.create(
                 model=MODEL,
                 messages=[
-                    {"role":"system","content":SYSTEM_PROMPT},
-                    {"role":"user","content":user_text}
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text}
                 ],
                 temperature=0.4,
             )
@@ -103,15 +111,12 @@ class MelanieClient(discord.Client):
             reply = ("I’m having trouble reaching our help brain right now. "
                      "Please email info@tgfx-academy.com and we’ll take care of you.")
 
-        # be friendly if greeted
         if any(w in user_text.lower() for w in ["hi", "hey", "hello", "how are you"]):
             reply = f"Hey there! I’m doing awesome, thanks for asking 🌟 How can I help? \n\n{reply}"
 
-        # send
         await self.safe_send(msg.channel, reply, reference=msg)
 
     async def safe_send(self, channel, text, reference=None):
-        # split long replies to avoid Discord 2000 char limit
         chunks = [text[i:i+1800] for i in range(0, len(text), 1800)]
         for i, ch in enumerate(chunks):
             await channel.send(ch, reference=reference if i == 0 else None)
